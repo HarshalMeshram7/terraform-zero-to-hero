@@ -1,97 +1,128 @@
+# Create EC2 Key Pair
+resource "aws_key_pair" "terraform_key" {
+  key_name   = "terraform_key"
+  public_key = file("~/.ssh/id_rsa.pub")  # Using the public key path variable
+}
+
+# Create a VPC
 resource "aws_vpc" "terraform_vpc" {
-  cidr_block = "10.0.0.0/16"
+  cidr_block = var.vpc_cidr  # Using the VPC CIDR block variable
   tags = {
     Name = "terraform_vpc"
   }
 }
 
+# Create a subnet
 resource "aws_subnet" "terraform_subnet" {
-  vpc_id = aws_vpc.terraform_vpc.id
-  cidr_block = "10.0.1.0/24"
-  availability_zone = "ap-south-1a"
+  vpc_id                  = aws_vpc.terraform_vpc.id
+  cidr_block              = var.subnet_cidr  # Using the subnet CIDR block variable
+  availability_zone       = var.availability_zone  # Using the availability zone variable
+  map_public_ip_on_launch = true
   tags = {
     Name = "terraform_subnet"
   }
 }
 
-resource "aws_internet_gateway" "terraform_IGW" {
+# Create an internet gateway
+resource "aws_internet_gateway" "terraform_igw" {
   vpc_id = aws_vpc.terraform_vpc.id
   tags = {
-    Name = "terraform_IGW"
+    Name = "terraform_igw"
   }
 }
 
-resource "aws_route_table" "terrafor_RT" {
+# Create a route table for the VPC
+resource "aws_route_table" "terraform_route_table" {
   vpc_id = aws_vpc.terraform_vpc.id
-  
+
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.terraform_IGW.id
-  }
-
-  tags = {
-    Name = "terraform_RT"
+    gateway_id = aws_internet_gateway.terraform_igw.id
   }
 }
 
-resource "aws_route_table_association" "terraformRTA" {
-  route_table_id = aws_route_table.terrafor_RT.id
-  subnet_id = aws_subnet.terraform_subnet.id
+# Associate route table with subnet
+resource "aws_route_table_association" "terraform_route_table_assoc" {
+  subnet_id      = aws_subnet.terraform_subnet.id
+  route_table_id = aws_route_table.terraform_route_table.id
 }
 
-resource "aws_security_group" "terraform_SG" {
-  name = "terraform_SG"
-  description = "allow ssh and http from anywhere"
-  vpc_id = aws_vpc.terraform_vpc.id
+# Create a security group
+resource "aws_security_group" "terraform_sg" {
+  name        = "terraform_sg"
+  description = "Allow SSH and HTTP"
+  vpc_id      = aws_vpc.terraform_vpc.id
 
   ingress {
-    from_port = "80"
-    to_port = "80"
-    protocol = "tcp"
-    cidr_blocks = [ "0.0.0.0/0" ]
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
-    from_port = "22"
-    to_port = "22"
-    protocol = "tcp"
-    cidr_blocks = [ "0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "terraform_SG"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-resource "aws_instance" "terraform_vpc_ec2" {
-  ami = "ami-0e35ddab05955cf57"
-  instance_type = "t2.micro"
-  key_name = "demoec2"
-  vpc_security_group_ids = [ aws_security_group.terraform_SG.id ]
-  subnet_id = aws_subnet.terraform_subnet.id
-  associate_public_ip_address = true
+
+
+# EC2 instance with user data (shell script)
+resource "aws_instance" "terraform_ec2" {
+  ami           = var.ami_id  # Using the AMI ID variable
+  instance_type = var.instance_type  # Using the instance type variable
+  subnet_id     = aws_subnet.terraform_subnet.id
+  security_groups = [aws_security_group.terraform_sg.id]
+  key_name      = aws_key_pair.terraform_key.key_name
 
   connection {
-      type = "ssh"
-      user = "ec2-user"
-      private_key = file("demoec2.pem")
-      host = self.public_ip
-  }
-
+    type        = "ssh"
+    user        = "ec2-user"  # Default user for Amazon Linux
+    private_key = file("~/.ssh/id_rsa") # Path to your private key
+    host        = self.public_ip  # EC2 instance public IP
+    }
+  # Upload the shell script to EC2
   provisioner "file" {
-    source = "shellscript.sh"
-    destination = "/home/ec2-user/shellscript.sh"
+    source      = "shellscript.sh"  # Path to your shellscript.sh
+    destination = "/tmp/shellscript.sh"    
   }
 
   provisioner "remote-exec" {
     inline = [ 
-      "sudo chmod a+rwx shellscript.sh",
+      "sudo yum update -y",
+      "cd /tmp",
+      "sudo chmod a+wx shellscript.sh",
       "./shellscript.sh"
      ]
   }
+
   tags = {
-    Name = "terraform-memegenerator"
+    Name = "Terraform EC2"
   }
-  
-  
+
+  # Output EC2 instance public IP
+  associate_public_ip_address = true
 }
+
+# Output the EC2 public IP and Key Pair download path
+output "ec2_public_ip" {
+  value = aws_instance.terraform_ec2.public_ip
+}
+
